@@ -54,6 +54,15 @@ async def get_product(product_id: int, db: AsyncSession = Depends(get_db),):
 
     return product
 
+@router.get("/{order_id}", response_model=ProductResponse)
+async def get_order(order_id: int, db: AsyncSession = Depends(get_db),):
+    result = await db.execute(select(order).where(order.id == order_id))
+    order = result.scalar_one_or_none()
+
+    if order is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,detail="Product not found",)
+
+    return product
 
 @router.patch("/{product_id}", response_model=ProductResponse)
 async def update_product(product_id: int,product_data: ProductUpdate,db: AsyncSession = Depends(get_db),):
@@ -89,3 +98,50 @@ async def update_stock(product_id: int,stock_data: StockUpdate,db: AsyncSession 
 
     result = await db.execute(select(Product).where(Product.id == product_id))
     return result.scalar_one()
+
+@router.get("/products/search")
+    def search_products(P: str, db: Session = Depends(get_db)):
+    
+        return db.query(Product).filter((Product.name.contains(P)) |(Product.description.contains(P))).all()
+
+
+@router.post("/orders")
+    def place_order(data: OrderCreate, db: Session = Depends(get_db)):
+        try:
+            order = Order()
+            db.add(order)
+            db.flush()
+
+            for item in data.items:
+                result = db.execute(update(Product).where(Product.id == item.product_id,Product.stock >= item.quantity).values(stock=Product.stock - item.quantity))
+
+                if result.rowcount == 0:
+                    raise HTTPException(status_code=400,detail="Product not found or insufficient stock")
+
+                product = db.get(Product, item.product_id)
+
+                db.add(OrderItem(order_id=order.id,product_id=item.product_id,quantity=item.quantity,unit_price=product.price))
+
+            db.commit()
+            db.refresh(order)
+            return order
+
+        except Exception:
+            db.rollback()
+            raise  
+
+@router.get("/sales")
+async def sales_report(db: AsyncSession = Depends(get_db),):
+    try:
+        result = await db.execute(select(func.count(Order.id).label("total_orders"),func.coalesce(func.sum(Order.quantity), 0).label("units_sold"),
+        func.coalesce(func.sum(Order.total_price), 0).label("total_sales"),))
+
+        report = result.one()
+
+        return {
+        "total_orders": report.total_orders,
+        "units_sold": report.units_sold,
+        "total_sales": report.total_sales,
+        }
+    except Exception:
+        raise  
